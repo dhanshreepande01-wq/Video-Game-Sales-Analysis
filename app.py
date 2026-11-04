@@ -3,11 +3,11 @@ import streamlit as st
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-import re
+import numpy as np
 
-# ==================================================
-# 1. PAGE CONFIGURATION
-# ==================================================
+# --------------------------------------------------
+# PAGE CONFIGURATION
+# --------------------------------------------------
 
 st.set_page_config(
     page_title="Video Game Sales Analysis",
@@ -17,13 +17,13 @@ st.set_page_config(
 
 st.title("🎮 Video Game Sales Analysis")
 st.write(
-    "Explore video game sales across platforms, "
-    "genres, publishers and regions."
+    "Explore video game sales across platforms, genres, "
+    "publishers and regions."
 )
 
-# ==================================================
-# 2. FILE UPLOAD
-# ==================================================
+# --------------------------------------------------
+# FILE UPLOAD
+# --------------------------------------------------
 
 uploaded_file = st.file_uploader(
     "Upload your vgsales.csv file",
@@ -31,196 +31,125 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is None:
-    st.info("Please upload your video game sales CSV file.")
+    st.info("Please upload your vgsales.csv file to continue.")
     st.stop()
 
 try:
     df = pd.read_csv(uploaded_file)
 except Exception as e:
-    st.error(f"Error reading CSV file: {e}")
+    st.error(f"Unable to read the CSV file: {e}")
     st.stop()
 
-if df.empty:
-    st.error("The uploaded CSV file is empty.")
-    st.stop()
+# --------------------------------------------------
+# STANDARDIZE COLUMN NAMES
+# --------------------------------------------------
 
-# ==================================================
-# 3. CLEAN COLUMN NAMES
-# ==================================================
+df.columns = df.columns.str.strip()
 
-# Remove extra spaces from column names
-df.columns = df.columns.astype(str).str.strip()
-
-# Match column names even if they have different
-# spaces, capital letters or special characters.
-
-def normalize_column(column):
-    return re.sub(r"[^a-z0-9]", "", column.lower())
-
-aliases = {
-    "Rank": ["rank", "ranking"],
-    "Name": ["name", "game", "game_name", "title"],
-    "Platform": ["platform", "console"],
-    "Year": ["year", "year_of_release", "release_year"],
-    "Genre": ["genre", "game_genre"],
-    "Publisher": ["publisher", "game_publisher"],
-    "NA_Sales": [
-        "na_sales", "north_america_sales",
-        "north_american_sales"
-    ],
-    "EU_Sales": [
-        "eu_sales", "europe_sales",
-        "european_sales"
-    ],
-    "JP_Sales": [
-        "jp_sales", "japan_sales",
-        "japanese_sales"
-    ],
-    "Other_Sales": [
-        "other_sales", "rest_of_world_sales"
-    ],
-    "Global_Sales": [
-        "global_sales", "worldwide_sales",
-        "total_sales"
-    ]
+# Match column names without depending on capitalization
+column_map = {
+    col.lower(): col for col in df.columns
 }
-
-existing_columns = {
-    normalize_column(col): col for col in df.columns
-}
-
-rename_columns = {}
-
-for standard_name, possible_names in aliases.items():
-    for possible_name in possible_names:
-        key = normalize_column(possible_name)
-
-        if key in existing_columns:
-            actual_name = existing_columns[key]
-            rename_columns[actual_name] = standard_name
-            break
-
-df = df.rename(columns=rename_columns)
-
-# ==================================================
-# 4. CHECK REQUIRED COLUMNS
-# ==================================================
 
 required_columns = [
-    "Name",
-    "Platform",
-    "Year",
-    "Genre",
-    "Publisher",
-    "NA_Sales",
-    "EU_Sales",
-    "JP_Sales",
-    "Other_Sales",
-    "Global_Sales"
+    "Rank", "Name", "Platform", "Year", "Genre",
+    "Publisher", "NA_Sales", "EU_Sales",
+    "JP_Sales", "Other_Sales", "Global_Sales"
 ]
 
 missing_columns = [
     col for col in required_columns
-    if col not in df.columns
+    if col.lower() not in column_map
 ]
 
 if missing_columns:
-    st.error("Some required columns are missing.")
-
-    st.write("**Missing columns:**")
-    st.write(missing_columns)
-
-    st.write("**Columns found in your CSV:**")
-    st.write(df.columns.tolist())
-
-    st.info(
-        "Please check that you uploaded the correct "
-        "video game sales dataset."
+    st.error(
+        "The uploaded dataset is missing these required columns: "
+        + ", ".join(missing_columns)
     )
+    st.write("Columns found in your file:", df.columns.tolist())
     st.stop()
 
-# ==================================================
-# 5. DATA PREPARATION
-# ==================================================
+# Rename columns to the standard dataset names
+df = df.rename(
+    columns={
+        column_map[col.lower()]: col
+        for col in required_columns
+    }
+)
 
-data = df.copy()
+# --------------------------------------------------
+# DATA PREPARATION
+# --------------------------------------------------
 
-# Convert numerical columns
 numeric_columns = [
-    "Year",
-    "NA_Sales",
-    "EU_Sales",
-    "JP_Sales",
-    "Other_Sales",
-    "Global_Sales"
+    "Rank", "Year", "NA_Sales", "EU_Sales",
+    "JP_Sales", "Other_Sales", "Global_Sales"
 ]
 
-if "Rank" in data.columns:
-    numeric_columns.append("Rank")
-
 for col in numeric_columns:
-    data[col] = pd.to_numeric(data[col], errors="coerce")
+    df[col] = pd.to_numeric(df[col], errors="coerce")
 
-# Replace missing categorical values
-data["Name"] = data["Name"].fillna("Unknown")
-data["Platform"] = data["Platform"].fillna("Unknown")
-data["Genre"] = data["Genre"].fillna("Unknown")
-data["Publisher"] = data["Publisher"].fillna("Unknown")
+# Keep missing years as missing.
+# Fill missing text values so they can be grouped.
+df["Publisher"] = df["Publisher"].fillna("Unknown")
+df["Genre"] = df["Genre"].fillna("Unknown")
+df["Platform"] = df["Platform"].fillna("Unknown")
+df["Name"] = df["Name"].fillna("Unknown")
 
-# ==================================================
-# 6. HELPER FUNCTIONS
-# ==================================================
+# Sales columns: treat missing sales values as zero
+sales_columns = [
+    "NA_Sales", "EU_Sales", "JP_Sales",
+    "Other_Sales", "Global_Sales"
+]
 
-def show_table(table):
-    if table is None or table.empty:
-        st.info("No data available.")
-    else:
-        st.table(table)
+df[sales_columns] = df[sales_columns].fillna(0)
+
+# --------------------------------------------------
+# DARK CHART STYLE
+# --------------------------------------------------
+
+def style_chart(fig, ax, title, xlabel, ylabel):
+    fig.patch.set_facecolor("#0E1117")
+    ax.set_facecolor("#0E1117")
+
+    ax.set_title(title, color="white", fontsize=14, pad=15)
+    ax.set_xlabel(xlabel, color="white")
+    ax.set_ylabel(ylabel, color="white")
+
+    ax.tick_params(colors="white")
+
+    for spine in ax.spines.values():
+        spine.set_color("#777777")
+
+    ax.grid(axis="y", alpha=0.2, color="white")
+    fig.tight_layout()
 
 
 def show_plot(fig):
-    fig.tight_layout()
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
 
 def make_bar(series, title, xlabel, ylabel):
-    series = series.dropna()
-
-    if series.empty:
-        st.info("No data available for this chart.")
-        return
-
     fig, ax = plt.subplots(figsize=(10, 5))
 
     sns.barplot(
         x=series.index.astype(str),
         y=series.values,
-        ax=ax
+        ax=ax,
+        color="#35A7A0"
     )
 
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    style_chart(fig, ax, title, xlabel, ylabel)
     ax.tick_params(axis="x", rotation=45)
 
     show_plot(fig)
 
 
-def get_genre_region():
-    columns = [
-        "NA_Sales",
-        "EU_Sales",
-        "JP_Sales",
-        "Other_Sales"
-    ]
-
-    return data.groupby("Genre")[columns].sum()
-
-
-# ==================================================
-# 7. SIDEBAR NAVIGATION
-# ==================================================
+# --------------------------------------------------
+# NAVIGATION
+# --------------------------------------------------
 
 st.sidebar.title("Navigation")
 
@@ -237,130 +166,192 @@ page = st.sidebar.radio(
     ]
 )
 
-# ==================================================
-# 8. DATA PREPARATION
-# ==================================================
+# --------------------------------------------------
+# 1. DATA PREPARATION
+# --------------------------------------------------
 
 if page == "Data Preparation":
 
     st.header("1. Data Preparation")
 
     st.subheader("Dataset Preview")
-    show_table(data.head(10))
+    st.dataframe(df.head(10), use_container_width=True, hide_index=True)
 
     col1, col2, col3 = st.columns(3)
 
-    col1.metric("Total Rows", f"{len(data):,}")
-    col2.metric("Total Columns", data.shape[1])
-    col3.metric("Duplicate Rows", f"{data.duplicated().sum():,}")
+    col1.metric("Total Rows", f"{len(df):,}")
+    col2.metric("Total Columns", df.shape[1])
+    col3.metric("Duplicate Rows", f"{df.duplicated().sum():,}")
 
     st.subheader("Missing Values")
 
-    missing = data.isnull().sum().rename("Missing Values")
-    show_table(missing.to_frame())
+    missing = df.isnull().sum().reset_index()
+    missing.columns = ["Column Name", "Missing Values"]
+
+    st.dataframe(missing, use_container_width=True, hide_index=True)
 
     st.subheader("Data Types")
 
-    types = data.dtypes.astype(str).rename("Data Type")
-    show_table(types.to_frame())
+    dtypes = df.dtypes.astype(str).reset_index()
+    dtypes.columns = ["Column Name", "Data Type"]
+
+    st.dataframe(dtypes, use_container_width=True, hide_index=True)
 
     st.subheader("Column Names")
-    st.write(data.columns.tolist())
+    st.write(df.columns.tolist())
 
 
-# ==================================================
-# 9. EXPLORATORY DATA ANALYSIS
-# ==================================================
+# --------------------------------------------------
+# 2. EXPLORATORY DATA ANALYSIS
+# --------------------------------------------------
 
 elif page == "EDA":
 
     st.header("2. Exploratory Data Analysis")
 
     st.subheader("Descriptive Statistics")
-    show_table(data.describe().round(2))
+
+    st.dataframe(
+        df.describe().round(2),
+        use_container_width=True
+    )
 
     st.subheader("Sales by Genre and Region")
 
-    genre_stats = data.groupby("Genre")[
-        ["NA_Sales", "EU_Sales", "JP_Sales", "Other_Sales"]
-    ].agg(["sum", "mean"]).round(2)
+    genre_region = df.groupby("Genre").agg(
+        NA_Total=("NA_Sales", "sum"),
+        NA_Average=("NA_Sales", "mean"),
+        EU_Total=("EU_Sales", "sum"),
+        EU_Average=("EU_Sales", "mean"),
+        JP_Total=("JP_Sales", "sum"),
+        JP_Average=("JP_Sales", "mean"),
+        Other_Total=("Other_Sales", "sum"),
+        Other_Average=("Other_Sales", "mean")
+    ).round(2).reset_index()
 
-    show_table(genre_stats)
+    st.dataframe(
+        genre_region,
+        use_container_width=True,
+        hide_index=True
+    )
 
     st.subheader("Platform Sales")
 
-    platform_stats = data.groupby("Platform")[
-        "Global_Sales"
-    ].agg(["sum", "mean"]).round(2)
+    platform_stats = df.groupby("Platform").agg(
+        Total_Sales=("Global_Sales", "sum"),
+        Average_Sales=("Global_Sales", "mean")
+    ).round(2).reset_index()
 
-    show_table(platform_stats)
+    st.dataframe(
+        platform_stats,
+        use_container_width=True,
+        hide_index=True
+    )
 
     st.subheader("Genre Global Sales")
 
-    genre_global = data.groupby("Genre")[
-        "Global_Sales"
-    ].agg(["sum", "mean"]).round(2)
+    genre_stats = df.groupby("Genre").agg(
+        Total_Sales=("Global_Sales", "sum"),
+        Average_Sales=("Global_Sales", "mean")
+    ).round(2).sort_values(
+        "Total_Sales", ascending=False
+    ).reset_index()
 
-    show_table(genre_global)
+    st.dataframe(
+        genre_stats,
+        use_container_width=True,
+        hide_index=True
+    )
 
+    # Global sales histogram
     st.subheader("Global Sales Distribution")
 
     fig, ax = plt.subplots(figsize=(10, 5))
+
     sns.histplot(
-        data=data,
+        data=df,
         x="Global_Sales",
         bins=30,
+        color="#35A7A0",
         ax=ax
     )
-    ax.set_title("Distribution of Global Sales")
-    ax.set_xlabel("Global Sales (Millions)")
-    ax.set_ylabel("Frequency")
+
+    style_chart(
+        fig, ax,
+        "Distribution of Global Sales",
+        "Global Sales (Millions)",
+        "Number of Games"
+    )
+
     show_plot(fig)
 
+    # Global sales boxplot
     st.subheader("Global Sales Box Plot")
 
     fig, ax = plt.subplots(figsize=(10, 3))
-    sns.boxplot(data=data, x="Global_Sales", ax=ax)
-    ax.set_title("Global Sales Outliers")
+
+    sns.boxplot(
+        data=df,
+        x="Global_Sales",
+        color="#E69F56",
+        ax=ax
+    )
+
+    style_chart(
+        fig, ax,
+        "Global Sales Outliers",
+        "Global Sales (Millions)",
+        ""
+    )
+
     show_plot(fig)
 
+    # Regional histograms
+    st.subheader("Regional Sales Distributions")
+
     regions = [
-        ("NA_Sales", "North America Sales Distribution"),
-        ("EU_Sales", "Europe Sales Distribution"),
-        ("JP_Sales", "Japan Sales Distribution"),
-        ("Other_Sales", "Other Regions Sales Distribution")
+        ("NA_Sales", "North America"),
+        ("EU_Sales", "Europe"),
+        ("JP_Sales", "Japan"),
+        ("Other_Sales", "Other Regions")
     ]
 
-    for column, title in regions:
+    for col, region_name in regions:
 
         fig, ax = plt.subplots(figsize=(9, 4))
 
         sns.histplot(
-            data=data,
-            x=column,
+            data=df,
+            x=col,
             bins=30,
+            color="#6386D8",
             ax=ax
         )
 
-        ax.set_title(title)
-        ax.set_xlabel("Sales (Millions)")
+        style_chart(
+            fig, ax,
+            f"{region_name} Sales Distribution",
+            "Sales (Millions)",
+            "Number of Games"
+        )
+
         show_plot(fig)
 
     st.subheader("Games by Genre")
 
-    genre_count = data["Genre"].value_counts()
+    genre_count = df["Genre"].value_counts()
 
     make_bar(
         genre_count,
-        "Games by Genre",
+        "Number of Games by Genre",
         "Genre",
         "Number of Games"
     )
 
 
-# ==================================================
-# 10. TOP SELLING GAMES
-# ==================================================
+# --------------------------------------------------
+# 3. TOP SELLING GAMES
+# --------------------------------------------------
 
 elif page == "Top Selling Games":
 
@@ -368,30 +359,28 @@ elif page == "Top Selling Games":
 
     st.subheader("Top 10 Games by Global Sales")
 
-    top_games = data.sort_values(
+    top_games = df.sort_values(
         "Global_Sales",
         ascending=False
-    )[
-        ["Name", "Platform", "Year", "Global_Sales"]
-    ].head(10)
+    )[["Name", "Platform", "Genre", "Global_Sales"]].head(10)
 
-    show_table(top_games)
+    st.dataframe(
+        top_games,
+        use_container_width=True,
+        hide_index=True
+    )
 
-    total_sales = data["Global_Sales"].sum()
+    total_sales = df["Global_Sales"].sum()
 
     st.metric(
         "Total Global Sales",
         f"{total_sales:,.2f} Million Units"
     )
 
-    st.caption(
-        "Sales figures are expressed in millions of units."
-    )
 
-
-# ==================================================
-# 11. PLATFORM PERFORMANCE
-# ==================================================
+# --------------------------------------------------
+# 4. PLATFORM PERFORMANCE
+# --------------------------------------------------
 
 elif page == "Platform Performance":
 
@@ -400,15 +389,19 @@ elif page == "Platform Performance":
     st.subheader("Top 10 Platforms by Global Sales")
 
     platform_sales = (
-        data.groupby("Platform")["Global_Sales"]
+        df.groupby("Platform")["Global_Sales"]
         .sum()
-        .nlargest(10)
+        .sort_values(ascending=False)
+        .head(10)
     )
 
-    show_table(
-        platform_sales.rename(
-            "Total Global Sales (Millions)"
-        ).to_frame()
+    platform_table = platform_sales.reset_index()
+    platform_table.columns = ["Platform", "Total Global Sales"]
+
+    st.dataframe(
+        platform_table.round(2),
+        use_container_width=True,
+        hide_index=True
     )
 
     make_bar(
@@ -420,34 +413,30 @@ elif page == "Platform Performance":
 
     st.subheader("Platforms with Most Top-Selling Games Over Time")
 
-    valid_years = data[
-        (data["Year"].notna()) &
-        (data["Year"] > 0) &
-        (data["Global_Sales"].notna())
-    ]
+    valid_years = df.dropna(subset=["Year"]).copy()
 
     if not valid_years.empty:
 
-        yearly_top = valid_years.loc[
+        top_games_year = valid_years.loc[
             valid_years.groupby("Year")["Global_Sales"].idxmax()
         ]
 
-        platform_year_count = yearly_top["Platform"].value_counts()
+        platform_count = top_games_year["Platform"].value_counts()
 
         make_bar(
-            platform_year_count,
-            "Platforms with Most Top-Selling Games Over Time",
+            platform_count,
+            "Platforms with the Most Top-Selling Games Over Time",
             "Platform",
             "Number of Years"
         )
 
     else:
-        st.info("No valid year data available.")
+        st.info("No valid year information is available.")
 
 
-# ==================================================
-# 12. GENRE ANALYSIS
-# ==================================================
+# --------------------------------------------------
+# 5. GENRE ANALYSIS
+# --------------------------------------------------
 
 elif page == "Genre Analysis":
 
@@ -456,12 +445,19 @@ elif page == "Genre Analysis":
     st.subheader("Global Sales by Genre")
 
     genre_sales = (
-        data.groupby("Genre")["Global_Sales"]
+        df.groupby("Genre")["Global_Sales"]
         .sum()
         .sort_values(ascending=False)
     )
 
-    show_table(genre_sales.to_frame())
+    genre_table = genre_sales.reset_index()
+    genre_table.columns = ["Genre", "Global Sales"]
+
+    st.dataframe(
+        genre_table.round(2),
+        use_container_width=True,
+        hide_index=True
+    )
 
     make_bar(
         genre_sales,
@@ -470,10 +466,11 @@ elif page == "Genre Analysis":
         "Global Sales (Millions)"
     )
 
+    # Genre vs Platform
     st.subheader("Genre Sales Across Platforms")
 
     genre_platform = pd.pivot_table(
-        data=data,
+        df,
         index="Genre",
         columns="Platform",
         values="Global_Sales",
@@ -481,55 +478,81 @@ elif page == "Genre Analysis":
         fill_value=0
     )
 
-    show_table(genre_platform)
+    st.dataframe(
+        genre_platform.round(2),
+        use_container_width=True
+    )
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
     genre_platform.plot(
         kind="bar",
-        ax=ax
+        ax=ax,
+        colormap="tab20"
     )
 
-    ax.set_title("Genre Sales Across Platforms")
-    ax.set_xlabel("Genre")
-    ax.set_ylabel("Global Sales (Millions)")
+    style_chart(
+        fig, ax,
+        "Genre Sales Across Platforms",
+        "Genre",
+        "Global Sales (Millions)"
+    )
+
     ax.tick_params(axis="x", rotation=45)
     ax.legend(
         title="Platform",
-        bbox_to_anchor=(1.02, 1)
+        bbox_to_anchor=(1.02, 1),
+        facecolor="#0E1117",
+        labelcolor="white"
     )
 
+    fig.tight_layout()
     show_plot(fig)
 
+    # Genre vs Region
     st.subheader("Genre Sales Across Regions")
 
-    genre_region = get_genre_region()
+    genre_region_total = df.groupby("Genre")[
+        sales_columns[:4]
+    ].sum()
 
-    show_table(genre_region)
+    st.dataframe(
+        genre_region_total.round(2),
+        use_container_width=True
+    )
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    genre_region.plot(
+    genre_region_total.plot(
         kind="bar",
-        ax=ax
+        ax=ax,
+        colormap="Set2"
     )
 
-    ax.set_title("Genre Sales Across Regions")
-    ax.set_xlabel("Genre")
-    ax.set_ylabel("Total Sales (Millions)")
-    ax.tick_params(axis="x", rotation=45)
+    style_chart(
+        fig, ax,
+        "Genre Sales Across Regions",
+        "Genre",
+        "Total Sales (Millions)"
+    )
 
+    ax.tick_params(axis="x", rotation=45)
+    ax.legend(
+        title="Region",
+        facecolor="#0E1117",
+        labelcolor="white"
+    )
+
+    fig.tight_layout()
     show_plot(fig)
 
+    # Genre vs Year
     st.subheader("Genre Sales Over the Years")
 
-    yearly_genre = data[
-        (data["Year"].notna()) &
-        (data["Year"] > 0)
-    ]
+    year_data = df.dropna(subset=["Year"])
 
     genre_year = (
-        yearly_genre.groupby(["Year", "Genre"])["Global_Sales"]
+        year_data.groupby(["Year", "Genre"])["Global_Sales"]
         .sum()
         .reset_index()
     )
@@ -546,19 +569,30 @@ elif page == "Genre Analysis":
             ax=ax
         )
 
-        ax.set_title("Global Sales by Genre Over the Years")
-        ax.set_xlabel("Year")
-        ax.set_ylabel("Global Sales (Millions)")
+        style_chart(
+            fig, ax,
+            "Global Sales by Genre Over the Years",
+            "Year",
+            "Global Sales (Millions)"
+        )
 
+        ax.legend(
+            title="Genre",
+            bbox_to_anchor=(1.02, 1),
+            facecolor="#0E1117",
+            labelcolor="white"
+        )
+
+        fig.tight_layout()
         show_plot(fig)
 
     else:
-        st.info("No valid year information available.")
+        st.info("No valid year information is available.")
 
 
-# ==================================================
-# 13. PUBLISHER PERFORMANCE
-# ==================================================
+# --------------------------------------------------
+# 6. PUBLISHER PERFORMANCE
+# --------------------------------------------------
 
 elif page == "Publisher Performance":
 
@@ -567,107 +601,133 @@ elif page == "Publisher Performance":
     st.subheader("Top Publisher by Global Sales in Each Genre")
 
     publisher_genre = (
-        data.groupby(["Genre", "Publisher"])["Global_Sales"]
+        df.groupby(["Genre", "Publisher"])["Global_Sales"]
         .sum()
         .reset_index()
     )
 
-    publisher_genre = publisher_genre.dropna(
-        subset=["Global_Sales"]
+    result = publisher_genre.loc[
+        publisher_genre.groupby("Genre")["Global_Sales"].idxmax()
+    ].sort_values(
+        "Global_Sales",
+        ascending=False
+    ).reset_index(drop=True)
+
+    result = result.rename(
+        columns={"Global_Sales": "Total Global Sales"}
     )
 
-    if not publisher_genre.empty:
+    st.dataframe(
+        result.round(2),
+        use_container_width=True,
+        hide_index=True
+    )
 
-        result = publisher_genre.loc[
-            publisher_genre.groupby("Genre")[
-                "Global_Sales"
-            ].idxmax()
-        ].sort_values(
-            "Global_Sales",
-            ascending=False
-        )
+    fig, ax = plt.subplots(figsize=(12, 6))
 
-        show_table(result)
+    sns.barplot(
+        data=result,
+        x="Genre",
+        y="Total Global Sales",
+        hue="Publisher",
+        dodge=False,
+        ax=ax
+    )
 
-        fig, ax = plt.subplots(figsize=(12, 6))
+    style_chart(
+        fig, ax,
+        "Top Publisher by Global Sales in Each Genre",
+        "Genre",
+        "Global Sales (Millions)"
+    )
 
-        sns.barplot(
-            data=result,
-            x="Genre",
-            y="Global_Sales",
-            hue="Publisher",
-            dodge=False,
-            ax=ax
-        )
+    ax.tick_params(axis="x", rotation=45)
+    ax.legend(
+        title="Publisher",
+        bbox_to_anchor=(1.02, 1),
+        facecolor="#0E1117",
+        labelcolor="white"
+    )
 
-        ax.set_title("Top Publisher by Global Sales in Each Genre")
-        ax.set_xlabel("Genre")
-        ax.set_ylabel("Global Sales (Millions)")
-        ax.tick_params(axis="x", rotation=45)
-        ax.legend(
-            title="Publisher",
-            bbox_to_anchor=(1.02, 1)
-        )
+    fig.tight_layout()
+    show_plot(fig)
 
-        show_plot(fig)
-
-    else:
-        st.info("No publisher sales information available.")
-
+    # Publisher vs Region
     st.subheader("Publisher Performance Across Regions")
 
-    publisher_region = data.groupby("Publisher")[
-        ["NA_Sales", "EU_Sales", "JP_Sales", "Other_Sales"]
+    publisher_region = df.groupby("Publisher")[
+        sales_columns[:4]
     ].sum()
 
-    top10 = (
+    top10_publishers = (
         publisher_region.sum(axis=1)
-        .nlargest(10)
+        .sort_values(ascending=False)
+        .head(10)
         .index
     )
 
-    publisher_region = publisher_region.loc[top10]
+    publisher_region = publisher_region.loc[
+        top10_publishers
+    ]
 
-    show_table(publisher_region)
+    st.dataframe(
+        publisher_region.round(2).reset_index(),
+        use_container_width=True,
+        hide_index=True
+    )
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
     publisher_region.plot(
         kind="bar",
-        ax=ax
+        ax=ax,
+        colormap="Set2"
     )
 
-    ax.set_title("Top 10 Publisher Performance Across Regions")
-    ax.set_xlabel("Publisher")
-    ax.set_ylabel("Total Sales (Millions)")
-    ax.tick_params(axis="x", rotation=45)
+    style_chart(
+        fig, ax,
+        "Top 10 Publishers Across Regions",
+        "Publisher",
+        "Total Sales (Millions)"
+    )
 
+    ax.tick_params(axis="x", rotation=45)
+    ax.legend(
+        title="Region",
+        facecolor="#0E1117",
+        labelcolor="white"
+    )
+
+    fig.tight_layout()
     show_plot(fig)
 
 
-# ==================================================
-# 14. REGIONAL SALES ANALYSIS
-# ==================================================
+# --------------------------------------------------
+# 7. REGIONAL SALES ANALYSIS
+# --------------------------------------------------
 
 elif page == "Regional Sales Analysis":
 
     st.header("7. Regional Sales Analysis")
 
-    regions = [
-        "NA_Sales",
-        "EU_Sales",
-        "JP_Sales",
-        "Other_Sales"
-    ]
+    region_sales = df[sales_columns[:4]].sum()
 
     st.subheader("Total Sales Across Regions")
 
-    region_sales = data[regions].sum()
+    region_table = region_sales.reset_index()
+    region_table.columns = ["Region", "Total Sales (Millions)"]
 
-    show_table(
-        region_sales.rename(
-            "Total Sales (Millions)"
-        ).to_frame()
+    region_table["Region"] = region_table["Region"].replace({
+        "NA_Sales": "North America",
+        "EU_Sales": "Europe",
+        "JP_Sales": "Japan",
+        "Other_Sales": "Other Regions"
+    })
+
+    st.dataframe(
+        region_table.round(2),
+        use_container_width=True,
+        hide_index=True
     )
 
     make_bar(
@@ -677,38 +737,52 @@ elif page == "Regional Sales Analysis":
         "Total Sales (Millions)"
     )
 
+    # Regional sales by genre
     st.subheader("Regional Sales by Genre")
 
-    genre_region = get_genre_region()
+    genre_region = df.groupby("Genre")[
+        sales_columns[:4]
+    ].sum()
 
-    show_table(genre_region)
+    st.dataframe(
+        genre_region.round(2),
+        use_container_width=True
+    )
 
     fig, ax = plt.subplots(figsize=(12, 6))
 
     genre_region.plot(
         kind="bar",
         stacked=True,
-        ax=ax
+        ax=ax,
+        colormap="Set2"
     )
 
-    ax.set_title("Regional Sales by Genre")
-    ax.set_xlabel("Genre")
-    ax.set_ylabel("Total Sales (Millions)")
-    ax.tick_params(axis="x", rotation=45)
-    ax.legend(title="Region")
+    style_chart(
+        fig, ax,
+        "Regional Sales by Genre",
+        "Genre",
+        "Total Sales (Millions)"
+    )
 
+    ax.tick_params(axis="x", rotation=45)
+    ax.legend(
+        title="Region",
+        facecolor="#0E1117",
+        labelcolor="white"
+    )
+
+    fig.tight_layout()
     show_plot(fig)
 
 
-# ==================================================
-# 15. FOOTER
-# ==================================================
+# --------------------------------------------------
+# FOOTER
+# --------------------------------------------------
 
 st.divider()
 
-st.success("Video Game Sales Analysis Completed!")
-
 st.caption(
-    "Developed using Python, Pandas, Seaborn, "
-    "Matplotlib and Streamlit."
+    "Video Game Sales Analysis | "
+    "Python, Pandas, NumPy, Seaborn, Matplotlib & Streamlit"
 )
